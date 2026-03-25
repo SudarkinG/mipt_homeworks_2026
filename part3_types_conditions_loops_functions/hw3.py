@@ -119,12 +119,10 @@ def is_on_or_before_report(
     record_date: tuple[int, int, int],
     report: tuple[int, int, int],
 ) -> bool:
-    """Report date is passed as calendar day only; include txs on that day."""
     return record_date <= report
 
 
 def row_calendar_date(row: dict[str, Any]) -> Date | None:
-    """Calendar day, month, year for the row (same order as extract_date)."""
     raw = row.get(date_field)
     if isinstance(raw, tuple) and len(raw) == DATE_PARTS_COUNT:
         day, month, year = raw
