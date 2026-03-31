@@ -101,27 +101,6 @@ def append_failed() -> None:
     financial_transactions_storage.append({})
 
 
-def entry_date_tuple(entry: dict[str, Any]) -> tuple[int, int, int] | None:
-    raw = entry.get(date_field)
-    if isinstance(raw, tuple) and len(raw) == DATE_PARTS_COUNT:
-        day, month, year = raw
-        return (int(year), int(month), int(day))
-    if isinstance(raw, str):
-        parsed_calendar = extract_date(raw)
-        if parsed_calendar is None:
-            return None
-        day, month, year = parsed_calendar
-        return (year, month, day)
-    return None
-
-
-def is_on_or_before_report(
-    record_date: tuple[int, int, int],
-    report: tuple[int, int, int],
-) -> bool:
-    return record_date <= report
-
-
 def row_calendar_date(row: dict[str, Any]) -> Date | None:
     raw = row.get(date_field)
     if isinstance(raw, tuple) and len(raw) == DATE_PARTS_COUNT:
@@ -132,12 +111,14 @@ def row_calendar_date(row: dict[str, Any]) -> Date | None:
     return None
 
 
-def is_before_or_on(transaction_date: Date, report_date: Date) -> bool:
-    if transaction_date[2] != report_date[2]:
-        return transaction_date[2] < report_date[2]
-    if transaction_date[1] != report_date[1]:
-        return transaction_date[1] < report_date[1]
-    return transaction_date[0] <= report_date[0]
+def is_before_or_on_calendar(transaction_date: Date, report_date: Date) -> bool:
+    transaction_day, transaction_month, transaction_year = transaction_date
+    report_day, report_month, report_year = report_date
+    if transaction_year != report_year:
+        return transaction_year < report_year
+    if transaction_month != report_month:
+        return transaction_month < report_month
+    return transaction_day <= report_day
 
 
 def is_same_month_year(first_date: Date, second_date: Date) -> bool:
@@ -146,22 +127,29 @@ def is_same_month_year(first_date: Date, second_date: Date) -> bool:
     return same_month and same_year
 
 
-def storage_income_date_amount(row: dict[str, Any]) -> tuple[Date, float] | None:
-    if not row or category_field in row:
+def row_is_expense_transaction(row: dict[str, Any]) -> bool:
+    return bool(row) and category_field in row
+
+
+def calendar_date_and_amount_from_row(row: dict[str, Any]) -> tuple[Date, float] | None:
+    if not row:
         return None
     calendar_date = row_calendar_date(row)
     if calendar_date is None:
         return None
     return calendar_date, float(row[amount_field])
+
+
+def storage_income_date_amount(row: dict[str, Any]) -> tuple[Date, float] | None:
+    if row_is_expense_transaction(row):
+        return None
+    return calendar_date_and_amount_from_row(row)
 
 
 def storage_expense_date_amount(row: dict[str, Any]) -> tuple[Date, float] | None:
-    if not row or category_field not in row:
+    if not row_is_expense_transaction(row):
         return None
-    calendar_date = row_calendar_date(row)
-    if calendar_date is None:
-        return None
-    return calendar_date, float(row[amount_field])
+    return calendar_date_and_amount_from_row(row)
 
 
 def calculate_income_totals(report_calendar_date: Date) -> tuple[float, float]:
@@ -172,7 +160,7 @@ def calculate_income_totals(report_calendar_date: Date) -> tuple[float, float]:
         if income_slice is None:
             continue
         transaction_date, amount = income_slice
-        if is_before_or_on(transaction_date, report_calendar_date):
+        if is_before_or_on_calendar(transaction_date, report_calendar_date):
             income_capital += amount
             if is_same_month_year(transaction_date, report_calendar_date):
                 month_income += amount
@@ -180,21 +168,21 @@ def calculate_income_totals(report_calendar_date: Date) -> tuple[float, float]:
 
 
 def expense_counts_for_month_stats(transaction_date: Date, report_calendar_date: Date) -> bool:
-    if not is_before_or_on(transaction_date, report_calendar_date):
+    if not is_before_or_on_calendar(transaction_date, report_calendar_date):
         return False
     return is_same_month_year(transaction_date, report_calendar_date)
 
 
-def calculate_expense_capital_delta(report_calendar_date: Date) -> float:
-    capital = ZERO
+def sum_expenses_on_or_before_report(report_calendar_date: Date) -> float:
+    total = ZERO
     for row in financial_transactions_storage:
         expense_slice = storage_expense_date_amount(row)
         if expense_slice is None:
             continue
         transaction_date, amount = expense_slice
-        if is_before_or_on(transaction_date, report_calendar_date):
-            capital -= amount
-    return capital
+        if is_before_or_on_calendar(transaction_date, report_calendar_date):
+            total += amount
+    return total
 
 
 def calculate_month_expenses_and_categories(report_calendar_date: Date) -> tuple[float, dict[str, float]]:
@@ -209,12 +197,15 @@ def calculate_month_expenses_and_categories(report_calendar_date: Date) -> tuple
             continue
         month_expenses += amount
         category_name = str(row["category"])
-        categories[category_name] = categories.get(category_name, ZERO) + amount
+        if category_name in categories:
+            categories[category_name] += amount
+        else:
+            categories[category_name] = amount
     return month_expenses, categories
 
 
 def calculate_expenses_block(report_calendar_date: Date) -> tuple[float, float, dict[str, float]]:
-    expense_capital = calculate_expense_capital_delta(report_calendar_date)
+    expense_capital = -sum_expenses_on_or_before_report(report_calendar_date)
     month_expenses, categories = calculate_month_expenses_and_categories(report_calendar_date)
     return expense_capital, month_expenses, categories
 
@@ -301,67 +292,15 @@ def parse_amount(amount_str: str) -> float | str:
     return parsed_number
 
 
-def rollup_until_report(report: tuple[int, int, int]) -> tuple[float, float]:
-    costs_amount = ZERO
-    incomes_amount = ZERO
-    for row in financial_transactions_storage:
-        record_date = entry_date_tuple(row)
-        if record_date is None or not is_on_or_before_report(record_date, report):
-            continue
-        money = float(row[amount_field])
-        if category_field in row:
-            costs_amount += money
-        else:
-            incomes_amount += money
-    return costs_amount, incomes_amount
-
-
-def bump_category(totals: dict[str, float], category: str, amount: float) -> None:
-    current = totals.get(category)
-    if current is None:
-        totals[category] = amount
-    else:
-        totals[category] = current + amount
-
-
-def all_cost_category_totals() -> dict[str, float]:
-    totals: dict[str, float] = {}
-    for row in financial_transactions_storage:
-        if category_field not in row:
-            continue
-        category_name = str(row[category_field])
-        bump_category(totals, category_name, float(row[amount_field]))
-    return totals
-
-
-def format_stat_category_details(details_by_category: dict[str, float]) -> list[str]:
-    lines: list[str] = []
-    for line_index, category_name in enumerate(details_by_category):
-        amount = details_by_category[category_name]
-        line = f"{line_index}. {category_name}: {amount}"
-        lines.append(line)
-    return lines
-
-
-def join_stats_answer(header: list[str], detail_lines: list[str]) -> str:
-    answer: list[str] = []
-    answer.extend(header)
-    answer.extend(detail_lines)
-    if len(detail_lines) == 0:
-        answer.append("")
-    answer.append("")
-    return "\n".join(answer)
-
-
 def format_money_line(value: float) -> str:
-    return f"{value:.2f}"
+    return str(round(value, 2))
 
 
 def format_detail_amount(value: float) -> str:
     rounded = round(value, 2)
     if rounded.is_integer():
         return str(int(rounded))
-    return f"{rounded:.2f}"
+    return str(rounded)
 
 
 def append_month_profit_or_loss(lines: list[str], month_in: float, month_out: float) -> None:
