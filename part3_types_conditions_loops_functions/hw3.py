@@ -197,10 +197,7 @@ def calculate_month_expenses_and_categories(report_calendar_date: Date) -> tuple
             continue
         month_expenses += amount
         category_name = str(row["category"])
-        if category_name in categories:
-            categories[category_name] += amount
-        else:
-            categories[category_name] = amount
+        categories[category_name] = categories.get(category_name, ZERO) + amount
     return month_expenses, categories
 
 
