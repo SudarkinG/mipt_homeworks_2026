@@ -43,6 +43,8 @@ class FIFOPolicy(Policy[K]):
         return self._order[0]
 
     def remove_key(self, key: K) -> None:
+        if key not in self._order:
+            return
         self._order.remove(key)
 
     def clear(self) -> None:
@@ -69,6 +71,8 @@ class LRUPolicy(Policy[K]):
         return None
 
     def remove_key(self, key: K) -> None:
+        if key not in self._order:
+            return
         self._order.remove(key)
 
     def clear(self) -> None:
@@ -135,8 +139,9 @@ class MIPTCache(Cache[K, V]):
         return self.storage.exists(key)
 
     def remove(self, key: K) -> None:
-        self.storage.remove(key)
-        self.policy.remove_key(key)
+        if self.exists(key):
+            self.storage.remove(key)
+            self.policy.remove_key(key)
 
     def clear(self) -> None:
         self.storage.clear()
