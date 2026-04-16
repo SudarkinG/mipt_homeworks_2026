@@ -70,7 +70,7 @@ class CircuitBreaker:
         return blocked_seconds < self._time_to_recover
 
     def _reset_if_recovered(self, now: datetime.datetime) -> None:
-        if not self._is_blocked(now):
+        if self._block_time is not None and not self._is_blocked(now):
             self._block_time = None
             self._failed_count = 0
 
